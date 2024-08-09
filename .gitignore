@@ -1,0 +1,12 @@
+*
+!*/
+
+!Cargo.toml
+!src/**/*.rs
+
+!README.md
+!.gitignore
+
+
+Cargo.lock
+/target

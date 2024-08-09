@@ -1,0 +1,24 @@
+[package]
+name = "iap-jwt"
+version = "0.1.0"
+edition = "2021"
+description = "Validate and decode Google Cloud Identity-Aware Proxy (IAP) JWTs"
+categories = ["authentication"]
+keywords = ["jwt", "jwk", "iap", "google"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/ryo33/iap-jwt"
+
+[features]
+default = ["reqwest"]
+reqwest = ["dep:reqwest"]
+
+[dependencies]
+jsonwebtoken = "9"
+reqwest = { version = "0.12.5", optional = true, features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["raw_value"] }
+thiserror = "1.0"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
