@@ -32,7 +32,7 @@ pub enum Error {
     InvalidAlgorithm(String),
     #[error("Invalid aud: {actual}, expected {expected}")]
     InvalidAudience { actual: String, expected: String },
-    #[error("Invalid issuer: {0}, expected {}", IAP_ISSUER)]
+    #[error("Invalid issuer: {0}, expected {IAP_ISSUER}")]
     InvalidIssuer(String),
     #[error("Invalid key format")]
     InvalidKeyFormat,
@@ -57,6 +57,12 @@ pub enum Error {
     AccessLevelsMissing,
     #[error("Invalid google claims")]
     InvalidGoogleClaims,
+    #[error("Token lifetime too long: iat: {iat}, exp: {exp}, max_lifetime: {max_lifetime}")]
+    TokenLifetimeTooLong {
+        iat: u64,
+        exp: u64,
+        max_lifetime: u64,
+    },
 }
 
 /// Configures validation options for JWT issued by Google IAP.
@@ -71,6 +77,10 @@ pub struct ValidationConfig {
     /// "If an account belongs to a hosted domain, the hd claim is provided to differentiate the domain the account is associated with." - https://cloud.google.com/iap/docs/signed-headers-howto
     google_hosted_domain: Option<Vec<String>>,
     access_levels: Option<Vec<String>>,
+    /// Time skew tolerance in seconds
+    skew: u64,
+    /// Maximum token lifetime in seconds
+    max_token_lifetime: u64,
 }
 
 impl ValidationConfig {
@@ -86,6 +96,8 @@ impl ValidationConfig {
             audience: audience.into_iter().map(Into::into).collect(),
             google_hosted_domain: None,
             access_levels: None,
+            skew: 30,                         // Default value: 30 seconds
+            max_token_lifetime: 600 + 2 * 30, // Default value: 10 minutes + 2 * skew
         }
     }
 
@@ -140,10 +152,20 @@ impl ValidationConfig {
             .unwrap()
             .as_secs();
 
-        if token.claims.iat > now {
+        // Validate iat (considering skew)
+        if token.claims.iat > now + self.skew {
             return Err(Error::FutureIat {
                 actual: token.claims.iat,
                 expected: now,
+            });
+        }
+
+        // Validate maximum token lifetime
+        if token.claims.exp > token.claims.iat + self.max_token_lifetime {
+            return Err(Error::TokenLifetimeTooLong {
+                iat: token.claims.iat,
+                exp: token.claims.exp,
+                max_lifetime: self.max_token_lifetime,
             });
         }
 
@@ -243,10 +265,9 @@ vyV/Pgn6B9dxIS7/oCKrS/KKAxkCpLavX3f8qPPcL91LfAlQ8RE9od+IxA==
         let now = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_secs()
-            - 30;
+            .as_secs();
         Claims {
-            exp: now + 3600,
+            exp: now + 600, // 10 minutes after iat (maximum is 10 minutes + 2*skew)
             iat: now,
             aud: TEST_AUD.to_string(),
             iss: "https://cloud.google.com/iap".into(),
@@ -505,7 +526,7 @@ c7lFwrILIXxuHADio2Kakfm20cD1c5yDcUC1oLOEgorF/MTF7gLpslS7Wit99HVl
     #[tokio::test]
     async fn test_decode_future_iat() {
         let mut claims = test_claims();
-        claims.iat += 60;
+        claims.iat += 120;
         let token = jsonwebtoken::encode(
             &test_header(),
             &claims,
@@ -748,5 +769,47 @@ c7lFwrILIXxuHADio2Kakfm20cD1c5yDcUC1oLOEgorF/MTF7gLpslS7Wit99HVl
             .await
             .unwrap();
         assert_eq!(decoded.sub, claims.sub);
+    }
+
+    #[tokio::test]
+    async fn test_decode_token_lifetime_too_long() {
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut claims = test_claims();
+        claims.iat = now - 60;
+        claims.exp = claims.iat + 661;
+
+        let token = jsonwebtoken::encode(
+            &test_header(),
+            &claims,
+            &EncodingKey::from_ec_pem(VALID_PRIVATE_KEY.as_bytes()).unwrap(),
+        )
+        .unwrap();
+
+        let client = mock_client(|kid| {
+            assert_eq!(kid, TEST_KID);
+            Ok(Some(VALID_PUBLIC_KEY.to_string()))
+        });
+
+        let error = ValidationConfig::new([TEST_AUD])
+            .decode_and_validate(&token, &client)
+            .await
+            .unwrap_err();
+
+        match error {
+            Error::TokenLifetimeTooLong {
+                iat,
+                exp,
+                max_lifetime,
+            } => {
+                assert_eq!(iat, claims.iat);
+                assert_eq!(exp, claims.exp);
+                assert_eq!(max_lifetime, 600 + 2 * 30); // 10 minutes + 2 * skew(30 seconds)
+            }
+            _ => panic!("Expected TokenLifetimeTooLong error, got: {:?}", error),
+        }
     }
 }

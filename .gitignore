@@ -6,7 +6,7 @@
 
 !README.md
 !.gitignore
-
+!CHANGELOG.md
 
 Cargo.lock
 /target
