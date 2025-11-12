@@ -7,6 +7,9 @@ use thiserror::Error;
 
 const IAP_ISSUER: &str = "https://cloud.google.com/iap";
 
+#[cfg(all(not(feature = "aws_lc_rs"), not(feature = "rust_crypto")))]
+compile_error!("Either aws_lc_rs or rust_crypto feature must be enabled");
+
 /// The claims in a JWT issued by Google IAP.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Claims {

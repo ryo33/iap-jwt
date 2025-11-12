@@ -16,11 +16,20 @@ Validate and decode Google Cloud Identity-Aware Proxy (IAP) JWTs
 - Injectable public key retrieval and caching for testability
 - Customizable validation options
 
-## Usage
+## Installation
 
 ```sh
 cargo add iap-jwt
 ```
+
+Two crypto backends are available via features, `aws_lc_rs` and `rust_crypto` (default), exactly one of which must be enabled.
+
+To use `aws_lc_rs` instead:
+```sh
+cargo add iap-jwt --no-default-features --features reqwest,aws_lc_rs
+```
+
+## Usage
 
 ```rust
 use iap_jwt::{ValidationConfig};
