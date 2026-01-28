@@ -142,6 +142,7 @@ impl ValidationConfig {
         let mut validation = Validation::new(Algorithm::ES256);
         validation.set_audience(&self.audience);
         validation.set_issuer(&[IAP_ISSUER]);
+        validation.leeway = self.skew;
 
         let token = decode::<Claims>(
             token,
@@ -589,6 +590,79 @@ c7lFwrILIXxuHADio2Kakfm20cD1c5yDcUC1oLOEgorF/MTF7gLpslS7Wit99HVl
             .await
             .unwrap_err();
         assert!(error.to_string().contains("Expired"));
+    }
+
+    /// Test that tokens with exp at the skew boundary are accepted.
+    /// According to IAP documentation: "exp - Must be in the future. Allow 30 seconds for skew."
+    #[tokio::test]
+    async fn test_decode_exp_within_skew_tolerance() {
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut claims = test_claims();
+        // Set exp to 30 seconds in the past - at the 30 second skew boundary
+        claims.iat = now - 600; // issued 10 minutes ago
+        claims.exp = now - 30; // expired 30 seconds ago, at 30s skew boundary
+
+        let token = jsonwebtoken::encode(
+            &test_header(),
+            &claims,
+            &EncodingKey::from_ec_pem(VALID_PRIVATE_KEY.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let client = mock_client(|key| {
+            assert_eq!(key, TEST_KID);
+            Ok(Some(VALID_PUBLIC_KEY.to_string()))
+        });
+
+        // This should succeed because exp is at the 30 second skew boundary
+        let decoded = ValidationConfig::new([TEST_AUD])
+            .decode_and_validate(&token, &client)
+            .await
+            .expect("Token with exp at skew boundary should be valid");
+
+        assert_eq!(decoded.exp, claims.exp);
+    }
+
+    /// Test that tokens with exp beyond the skew tolerance are rejected.
+    /// According to IAP documentation: "exp - Must be in the future. Allow 30 seconds for skew."
+    /// A token that expired 31 seconds ago should be rejected (beyond 30s skew).
+    #[tokio::test]
+    async fn test_decode_exp_beyond_skew_tolerance() {
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut claims = test_claims();
+        // Set exp to 31 seconds in the past - beyond the 30 second skew tolerance
+        claims.iat = now - 600; // issued 10 minutes ago
+        claims.exp = now - 31; // expired 31 seconds ago, beyond 30s skew
+
+        let token = jsonwebtoken::encode(
+            &test_header(),
+            &claims,
+            &EncodingKey::from_ec_pem(VALID_PRIVATE_KEY.as_bytes()).unwrap(),
+        )
+        .unwrap();
+        let client = mock_client(|key| {
+            assert_eq!(key, TEST_KID);
+            Ok(Some(VALID_PUBLIC_KEY.to_string()))
+        });
+
+        // This should fail because exp is beyond the 30 second skew tolerance
+        let error = ValidationConfig::new([TEST_AUD])
+            .decode_and_validate(&token, &client)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("Expired"),
+            "Token expired 31 seconds ago should be rejected, but got: {}",
+            error
+        );
     }
 
     #[tokio::test]
